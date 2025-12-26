@@ -82,7 +82,7 @@ class BaseProcessor(ABC):
         payload = {
             "model": self.openai_model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1024
+            "max_tokens": 16384
         }
         
         try:
