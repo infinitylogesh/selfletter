@@ -11,9 +11,12 @@ import os
 import re
 import time
 import logging
+import smtplib
+import markdown
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from email.message import EmailMessage
 
 from notion_client import Client as NotionClient
 from prompt import SUMMARY as SUMMARY_PROMPT
@@ -288,6 +291,65 @@ def process_one(notion: NotionClient, page: dict, processor_factory: ProcessorFa
         return False
 
 
+def send_email(subject: str, body_markdown: str):
+    """Send summary via email using SMTP (rendered HTML)."""
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "465"))
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASS")
+    email_to = os.environ.get("EMAIL_TO")
+    email_from = os.environ.get("EMAIL_FROM", user)
+
+    if not all([user, password, email_to]):
+        logger.warning("Email configuration missing (SMTP_USER, SMTP_PASS, EMAIL_TO). Skipping email.")
+        return
+
+    # Convert Markdown to HTML
+    html_content = markdown.markdown(body_markdown)
+    
+    # Add some basic styling for better email rendering
+    styled_html = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+            h1 {{ color: #1a1a1a; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
+            h2 {{ color: #2c3e50; margin-top: 30px; border-bottom: 1px solid #eee; }}
+            h3 {{ color: #34495e; margin-top: 20px; }}
+            a {{ color: #3498db; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
+            code {{ background-color: #f8f8f8; padding: 2px 4px; border-radius: 4px; font-family: monospace; }}
+            hr {{ border: 0; border-top: 1px solid #eee; margin: 30px 0; }}
+            blockquote {{ border-left: 4px solid #eee; padding-left: 15px; color: #666; font-style: italic; }}
+        </style>
+    </head>
+    <body>
+        {html_content}
+    </body>
+    </html>
+    """
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = email_from
+    msg["To"] = email_to
+    
+    # Set the plain text version as a fallback
+    msg.set_content(body_markdown)
+    
+    # Add the HTML version
+    msg.add_alternative(styled_html, subtype="html")
+
+    try:
+        # SSL on 465 (simple + reliable)
+        with smtplib.SMTP_SSL(host, port) as server:
+            server.login(user, password)
+            server.send_message(msg)
+        logger.info(f"Email sent successfully to {email_to}")
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+
+
 def main():
     """Main entry point."""
     logger.info("Starting Notion Summarizer")
@@ -311,7 +373,7 @@ def main():
     try:
         # Default to yesterday's date
         from datetime import timedelta
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = datetime.now() - timedelta(days=2)
         yesterday_date = yesterday.strftime("%Y-%m-%d")
         
         resp = query_unprocessed(notion, yesterday_date, page_size=100)
@@ -340,6 +402,13 @@ def main():
             if newsletter_path:
                 logger.info(f"Daily newsletter created: {newsletter_path}")
                 print(f"[{datetime.now(timezone.utc).isoformat()}] Daily newsletter created: {newsletter_path}")
+                
+                # Send newsletter via email
+                content = Path(newsletter_path).read_text()
+                send_email(
+                    subject=f"Daily AI Digest - {yesterday_date}",
+                    body_markdown=content
+                )
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")
