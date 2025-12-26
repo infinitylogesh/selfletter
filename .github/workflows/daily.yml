@@ -1,0 +1,56 @@
+name: Notion daily summarizer
+
+on:
+  schedule:
+    - cron: "30 2 * * *"  # runs daily at 02:30 UTC
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run summarizer
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_SOURCE_DB_ID: ${{ secrets.NOTION_SOURCE_DB_ID }}
+          NOTION_DEST_DB_ID: ${{ secrets.NOTION_DEST_DB_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: "gpt-4o-mini"
+          NOTION_PROP_URL: "URL"
+          NOTION_PROP_DONE: "Summarized"
+          NOTION_PROP_ERR: "Last error"
+          NOTION_PROP_RETRY: "Retry count"
+          NOTION_DEST_PROP_TITLE: "Name"
+          NOTION_DEST_PROP_URL: "Source URL"
+          NOTION_DEST_PROP_TYPE: "Type"
+          NOTION_DEST_PROP_SUMM: "Summary"
+          NOTION_DEST_PROP_DATE: "Added"
+          SUMMARY_PROMPT: |
+            You are my research assistant.
+            Produce:
+            1) TL;DR (3 bullets)
+            2) Key contributions (5 bullets)
+            3) Methods / architecture (short)
+            4) Results (numbers if present)
+            5) Limitations + follow-ups
+            Keep it crisp, no fluff.
+
+            Title: {title}
+            URL: {url}
+
+            CONTENT:
+            {content}
+        run: |
+          python main.py
