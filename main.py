@@ -373,7 +373,7 @@ def main():
     try:
         # Default to yesterday's date
         from datetime import timedelta
-        yesterday = datetime.now() - timedelta(days=2)
+        yesterday = datetime.now() - timedelta(days=1)
         yesterday_date = yesterday.strftime("%Y-%m-%d")
         
         resp = query_unprocessed(notion, yesterday_date, page_size=100)
