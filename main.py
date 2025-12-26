@@ -4,19 +4,21 @@ Notion Summarizer - Fetches content from arXiv/blogs and summarizes via OpenAI.
 Designed to run as a daily cron job via GitHub Actions.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import re
 import time
-import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-import requests
 from notion_client import Client as NotionClient
-import trafilatura
-from bs4 import BeautifulSoup
-
+from prompt import SUMMARY as SUMMARY_PROMPT
+from processors import ProcessorFactory
+from combiner import NewsletterCombiner
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +31,10 @@ logger = logging.getLogger(__name__)
 # Config (edit to match your DB property names)
 # ----------------------------
 SOURCE_DB_ID = os.environ["NOTION_SOURCE_DB_ID"]
-DEST_DB_ID = os.environ["NOTION_DEST_DB_ID"]
+DEST_DB_ID = os.environ.get("NOTION_DEST_DB_ID")  # Optional: kept for backward compat, used for dedup check
+
+# Output directory for summaries (local file storage)
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "newsletter")
 
 PROP_URL = os.environ.get("NOTION_PROP_URL", "URL")
 PROP_DONE = os.environ.get("NOTION_PROP_DONE", "Summarized")
@@ -44,24 +49,9 @@ DEST_PROP_DATE = os.environ.get("NOTION_DEST_PROP_DATE", "Added")
 
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_ENDPOINT = os.environ.get("OPENAI_ENDPOINT", "https://api.openai.com/v1/responses")
-
-# Your custom summarization prompt template.
-# Use {title}, {url}, {content} placeholders.
-SUMMARY_PROMPT = os.environ.get(
-    "SUMMARY_PROMPT",
-    """Summarize the following content concisely.
-
-Title: {title}
-URL: {url}
-
-CONTENT:
-{content}
-
-Provide a brief summary (2-3 paragraphs) covering the main points."""
-)
+OPENAI_API_KEY = os.environ["API_KEY"]
+OPENAI_MODEL = os.environ.get("MODEL", "gpt-4o-mini")
+OPENAI_ENDPOINT = os.environ.get("ENDPOINT", "https://openrouter.ai/api/v1")
 
 # Safety limits to keep cost bounded
 MAX_CHARS = int(os.environ.get("MAX_CHARS", "120000"))
@@ -69,140 +59,14 @@ MAX_CHARS = int(os.environ.get("MAX_CHARS", "120000"))
 # User agent for HTTP requests
 UA = os.environ.get("USER_AGENT", "NotionSummarizerBot/1.0 (+https://github.com/yourusername/selfletter)")
 
-# arXiv ID regex patterns
-ARXIV_ID_RE = re.compile(r"(?:arxiv\.org/(?:abs|pdf|html)/)(\d{4}\.\d{4,5})(?:v\d+)?")
-ARXIV_ID_RE2 = re.compile(r"arXiv:(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
-
 # Retry configuration
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 
 
-def http_get(url: str, timeout: int = 45) -> str:
-    """Fetch URL content with error handling."""
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
-    r.raise_for_status()
-    return r.text
 
 
-def extract_arxiv_id(url: str) -> Optional[str]:
-    """Extract arXiv ID from various URL formats."""
-    m = ARXIV_ID_RE.search(url)
-    if m:
-        return m.group(1)
-    m2 = ARXIV_ID_RE2.search(url)
-    if m2:
-        return m2.group(1)
-    return None
 
-
-def extract_readable_text_from_html(html: str) -> str:
-    """Extract readable text from HTML, removing scripts/styles."""
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Remove scripts/styles/noscript
-    for tag in soup(["script", "style", "noscript", "nav", "footer", "header"]):
-        tag.decompose()
-
-    text = soup.get_text("\n")
-    # Normalize whitespace
-    lines = [ln.strip() for ln in text.splitlines()]
-    lines = [ln for ln in lines if ln]
-    return "\n".join(lines)
-
-
-def fetch_blog_fulltext(url: str) -> str:
-    """Fetch full article content using Trafilatura."""
-    logger.info(f"Fetching blog content from: {url}")
-    downloaded = trafilatura.fetch_url(url)
-    if not downloaded:
-        logger.warning(f"Trafilatura failed, falling back to raw HTML: {url}")
-        return extract_readable_text_from_html(http_get(url))
-
-    extracted = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
-    if extracted and extracted.strip():
-        return extracted
-
-    logger.warning(f"Trafilatura extraction empty, using raw HTML: {url}")
-    return extract_readable_text_from_html(downloaded)
-
-
-def fetch_arxiv_html_fulltext(arxiv_id: str) -> tuple[str, str]:
-    """
-    Fetch arXiv paper content.
-    Returns (url_used, extracted_text).
-    Tries official arXiv HTML endpoint first, falls back to abstract page.
-    """
-    logger.info(f"Fetching arXiv content for: {arxiv_id}")
-
-    # Try official HTML endpoint
-    html_url = f"https://arxiv.org/html/{arxiv_id}"
-    try:
-        html = http_get(html_url)
-        text = extract_readable_text_from_html(html)
-        if text.strip() and len(text) > 500:  # Basic sanity check
-            logger.info(f"Successfully fetched HTML from: {html_url}")
-            return html_url, text
-        logger.warning(f"HTML content too short for {arxiv_id}")
-    except Exception as e:
-        logger.warning(f"Failed to fetch HTML for {arxiv_id}: {e}")
-
-    # Fallback to abstract page
-    logger.info(f"Falling back to abstract page for: {arxiv_id}")
-    abs_url = f"https://arxiv.org/abs/{arxiv_id}"
-    html = http_get(abs_url)
-    text = extract_readable_text_from_html(html)
-    return abs_url, text
-
-
-def openai_summarize(title: str, url: str, content: str) -> str:
-    """Generate summary using OpenAI API."""
-    logger.info(f"Generating summary for: {title or url}")
-
-    # Truncate content to stay within limits
-    content = content[:MAX_CHARS]
-    logger.info(f"Content length after truncation: {len(content)} chars")
-
-    prompt = SUMMARY_PROMPT.format(title=title or "(untitled)", url=url, content=content)
-
-    payload = {
-        "model": OPENAI_MODEL,
-        "input": [
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": prompt}]
-            }
-        ]
-    }
-
-    try:
-        r = requests.post(
-            OPENAI_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(payload),
-            timeout=120,
-        )
-        r.raise_for_status()
-        data = r.json()
-
-        # Extract text from response
-        out_texts = []
-        for item in data.get("output", []):
-            for c in item.get("content", []):
-                if c.get("type") in ("output_text", "text"):
-                    out_texts.append(c.get("text", ""))
-
-        summary = "\n".join(t for t in out_texts if t).strip()
-        return summary if summary else "(empty summary)"
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"OpenAI API error: {e}")
-        raise RuntimeError(f"OpenAI API request failed: {e}")
-
-
-def notion_rich_text(s: str, chunk: int = 1800) -> list[dict]:
+def notion_rich_text(s: str, chunk: int = 1800) -> list:
     """Split text into Notion rich text blocks."""
     s = s or ""
     parts = [s[i : i + chunk] for i in range(0, len(s), chunk)]
@@ -251,21 +115,28 @@ def safe_set_error(notion: NotionClient, page_id: str, msg: str):
             },
         )
     except Exception as e:
-        logger.error(f"Failed to set error on page {page_id}: {e}")
+        err_msg = str(e)
+        if "does not exist" in err_msg:
+            logger.warning(f"Error property '{PROP_ERR}' not found in Notion database. Skipping error logging to Notion.")
+        else:
+            logger.error(f"Failed to set error on page {page_id}: {e}")
 
 
-def increment_retry_count(notion: NotionClient, page_id: str):
+def increment_retry_count(notion: NotionClient, page_id: str, current_count: int):
     """Increment retry count on a Notion page."""
     try:
-        count = get_retry_count({"properties": {PROP_RETRY: {"number": 0}}})
         notion.pages.update(
             page_id=page_id,
             properties={
-                PROP_RETRY: {"number": count + 1},
+                PROP_RETRY: {"number": current_count + 1},
             },
         )
     except Exception as e:
-        logger.warning(f"Failed to increment retry count: {e}")
+        err_msg = str(e)
+        if "does not exist" in err_msg:
+            logger.warning(f"Retry count property '{PROP_RETRY}' not found in Notion database. Skipping.")
+        else:
+            logger.warning(f"Failed to increment retry count: {e}")
 
 
 def mark_done(notion: NotionClient, page_id: str, done: bool = True):
@@ -281,67 +152,91 @@ def mark_done(notion: NotionClient, page_id: str, done: bool = True):
         logger.error(f"Failed to mark page {page_id} as done: {e}")
 
 
-def create_summary_page(
-    notion: NotionClient,
+def sanitize_filename(name: str) -> str:
+    """Convert title to safe filename."""
+    # Lowercase, replace spaces with dashes, remove special chars
+    name = name.lower().strip()
+    name = re.sub(r"[^\w\s-]", "", name)
+    name = re.sub(r"[\s_]+", "-", name)
+    name = re.sub(r"-+", "-", name).strip("-")
+    return name if name else "untitled"
+
+
+def save_summary_to_file(
     title: str,
     source_url: str,
     typ: str,
     summary: str,
+    date_str: str = None,
 ):
-    """Create a summary page in the destination Notion database."""
-    logger.info(f"Creating summary page for: {title or source_url}")
+    """Save summary to a markdown file in date-based folder structure."""
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
 
+    # Create folder: newsletter/YYYY-MM-DD/{type}/
+    folder = Path(OUTPUT_DIR) / date_str / typ
+    folder.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename from title
+    safe_title = sanitize_filename(title or source_url)
+    filename = f"{safe_title}.md"
+    filepath = folder / filename
+
+    # Handle duplicate filenames
+    counter = 1
+    while filepath.exists():
+        filename = f"{safe_title}-{counter}.md"
+        filepath = folder / filename
+        counter += 1
+
+    # Create markdown content with frontmatter
     now = datetime.now(timezone.utc).isoformat()
+    content = f"""---
+title: "{title or source_url}"
+source_url: "{source_url}"
+type: "{typ}"
+date: "{now}"
+---
 
-    properties = {
-        DEST_PROP_TITLE: {"title": [{"type": "text", "text": {"content": (title or source_url)[:200] or "Untitled"}}]},
-        DEST_PROP_URL: {"url": source_url},
-        DEST_PROP_TYPE: {"select": {"name": typ}},
-        DEST_PROP_SUMM: {"rich_text": notion_rich_text(summary[:9000])},
-    }
+{summary}
+"""
 
-    # Add date if property exists
-    if DEST_PROP_DATE:
-        try:
-            properties[DEST_PROP_DATE] = {"date": {"start": now}}
-        except Exception:
-            pass
-
-    notion.pages.create(
-        parent={"database_id": DEST_DB_ID},
-        properties=properties,
-    )
+    filepath.write_text(content)
+    logger.info(f"Saved summary to: {filepath}")
 
 
-def is_url_already_processed(notion: NotionClient, url: str) -> bool:
-    """Check if a URL has already been processed in the destination DB."""
-    try:
-        response = notion.databases.query(
-            database_id=DEST_DB_ID,
-            filter={
-                "property": DEST_PROP_URL,
-                "url": {"equals": url}
-            }
-        )
-        return len(response.get("results", [])) > 0
-    except Exception:
+def is_url_already_processed(url: str) -> bool:
+    """Check if a URL has already been processed by looking at local files."""
+    folder = Path(OUTPUT_DIR)
+    if not folder.exists():
         return False
 
+    for md_file in folder.rglob("*.md"):
+        try:
+            content = md_file.read_text()
+            if url in content:
+                return True
+        except Exception:
+            continue
+    return False
 
-def query_unprocessed(notion: NotionClient, page_size: int = 25) -> dict:
-    """Query Notion for unprocessed pages."""
+
+def query_unprocessed(notion: NotionClient, date: str, page_size: int = 100) -> dict:
+    """Query Notion for unprocessed pages (filter by date in Python)."""
     return notion.databases.query(
         database_id=SOURCE_DB_ID,
         page_size=page_size,
         filter={
-            "property": PROP_DONE,
-            "checkbox": {"equals": False}
-        }
+            "and": [
+                {"property": PROP_DONE, "checkbox": {"equals": False}},
+                {"property": "Created", "date": {"equals": date}},
+            ]
+        },
     )
 
 
-def process_one(notion: NotionClient, page: dict) -> bool:
-    """Process a single Notion page."""
+def process_one(notion: NotionClient, page: dict, processor_factory: ProcessorFactory, date_str: str = None) -> bool:
+    """Process a single Notion page using the processor factory."""
     page_id = page["id"]
     title = get_page_title(page)
     url = get_url_property(page)
@@ -349,57 +244,46 @@ def process_one(notion: NotionClient, page: dict) -> bool:
     if not url:
         logger.warning(f"Page {page_id} missing URL property")
         safe_set_error(notion, page_id, f"Missing URL property '{PROP_URL}'.")
-        mark_done(notion, page_id, done=True)
+        # mark_done(notion, page_id, done=True)
         return True  # Skip this page, no URL to process
 
     retry_count = get_retry_count(page)
     if retry_count >= MAX_RETRIES:
         logger.warning(f"Page {page_id} exceeded max retries ({MAX_RETRIES}), skipping")
         safe_set_error(notion, page_id, f"Max retries ({MAX_RETRIES}) exceeded")
-        mark_done(notion, page_id, done=True)
+        # mark_done(notion, page_id, done=True)
         return True
 
     try:
         # Check if already processed
-        if is_url_already_processed(notion, url):
+        if is_url_already_processed(url):
             logger.info(f"URL already processed, skipping: {url}")
-            mark_done(notion, page_id, done=True)
+            # mark_done(notion, page_id, done=True)
             return True
 
-        arxiv_id = extract_arxiv_id(url)
+        # Get appropriate processor for this URL
+        processor = processor_factory.get_processor(url)
+        
+        # Process the content
+        final_title, content_type, actual_url, summary = processor.process(url, title)
 
-        if arxiv_id:
-            used_url, text = fetch_arxiv_html_fulltext(arxiv_id)
-            typ = "arxiv"
-            content_url = used_url
-        else:
-            text = fetch_blog_fulltext(url)
-            typ = "blog"
-            content_url = url
-
-        if not text or len(text.strip()) < 200:
-            raise RuntimeError(f"Extracted content too short ({len(text) if text else 0} chars)")
-
-        logger.info(f"Content length for {typ}: {len(text)} chars")
-
-        summary = openai_summarize(title=title, url=content_url, content=text)
-
-        create_summary_page(
-            notion=notion,
-            title=title or content_url,
-            source_url=content_url,
-            typ=typ,
+        # Save summary to file
+        save_summary_to_file(
+            title=final_title,
+            source_url=actual_url,
+            typ=content_type,
             summary=summary,
+            date_str=date_str,
         )
 
-        mark_done(notion, page_id, done=True)
-        logger.info(f"Successfully processed: {title or url}")
+        # mark_done(notion, page_id, done=True)
+        logger.info(f"Successfully processed: {final_title}")
         return True
 
     except Exception as e:
         logger.error(f"Error processing page {page_id}: {e}")
         safe_set_error(notion, page_id, f"{type(e).__name__}: {str(e)[:500]}")
-        increment_retry_count(notion, page_id)
+        increment_retry_count(notion, page_id, retry_count)
         time.sleep(1)
         return False
 
@@ -410,26 +294,52 @@ def main():
     start_time = datetime.now()
 
     notion = NotionClient(auth=NOTION_TOKEN)
+    
+    # Initialize processor factory
+    processor_factory = ProcessorFactory(
+        openai_api_key=OPENAI_API_KEY,
+        openai_model=OPENAI_MODEL,
+        openai_endpoint=OPENAI_ENDPOINT,
+        summary_prompt=SUMMARY_PROMPT,
+        max_chars=MAX_CHARS,
+        user_agent=UA,
+    )
+    
+    # Initialize newsletter combiner
+    combiner = NewsletterCombiner(output_dir=OUTPUT_DIR)
 
     try:
-        resp = query_unprocessed(notion, page_size=25)
+        # Default to yesterday's date
+        from datetime import timedelta
+        yesterday = datetime.now() - timedelta(days=1)
+        yesterday_date = yesterday.strftime("%Y-%m-%d")
+        
+        resp = query_unprocessed(notion, yesterday_date, page_size=100)
         results = resp.get("results", [])
 
         if not results:
             logger.info("No unprocessed items found")
-            print(f"[{datetime.now(timezone.utc).isoformat()}] No items to process.")
+            print(f"[{datetime.now(timezone.utc).isoformat()}] No items to process (Read=false).")
             return
 
-        logger.info(f"Found {len(results)} unprocessed items")
+        logger.info(f"Processing {len(results)} items")
 
         success_count = 0
         for page in results:
-            if process_one(notion, page):
+            if process_one(notion, page, processor_factory, date_str=yesterday_date):
                 success_count += 1
 
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(f"Processed {success_count}/{len(results)} items in {elapsed:.1f}s")
         print(f"[{datetime.now(timezone.utc).isoformat()}] Processed {success_count}/{len(results)} items in {elapsed:.1f}s")
+        
+        # Combine daily summaries into newsletter
+        if success_count > 0:
+            logger.info("Combining daily summaries into newsletter...")
+            newsletter_path = combiner.combine_daily_summaries(yesterday_date)
+            if newsletter_path:
+                logger.info(f"Daily newsletter created: {newsletter_path}")
+                print(f"[{datetime.now(timezone.utc).isoformat()}] Daily newsletter created: {newsletter_path}")
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")

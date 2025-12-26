@@ -25,18 +25,13 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_SOURCE_DB_ID: ${{ secrets.NOTION_SOURCE_DB_ID }}
-          NOTION_DEST_DB_ID: ${{ secrets.NOTION_DEST_DB_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OUTPUT_DIR: "newsletter"
           OPENAI_MODEL: "gpt-4o-mini"
           NOTION_PROP_URL: "URL"
           NOTION_PROP_DONE: "Summarized"
           NOTION_PROP_ERR: "Last error"
           NOTION_PROP_RETRY: "Retry count"
-          NOTION_DEST_PROP_TITLE: "Name"
-          NOTION_DEST_PROP_URL: "Source URL"
-          NOTION_DEST_PROP_TYPE: "Type"
-          NOTION_DEST_PROP_SUMM: "Summary"
-          NOTION_DEST_PROP_DATE: "Added"
           SUMMARY_PROMPT: |
             You are my research assistant.
             Produce:
