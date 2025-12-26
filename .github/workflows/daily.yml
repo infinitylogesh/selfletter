@@ -25,27 +25,13 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_SOURCE_DB_ID: ${{ secrets.NOTION_SOURCE_DB_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OUTPUT_DIR: "newsletter"
-          OPENAI_MODEL: "gpt-4o-mini"
+          MODEL: "gpt-4o-mini"
+          ENDPOINT: "https://openrouter.ai/api/v1/chat/completions"
           NOTION_PROP_URL: "URL"
           NOTION_PROP_DONE: "Summarized"
           NOTION_PROP_ERR: "Last error"
           NOTION_PROP_RETRY: "Retry count"
-          SUMMARY_PROMPT: |
-            You are my research assistant.
-            Produce:
-            1) TL;DR (3 bullets)
-            2) Key contributions (5 bullets)
-            3) Methods / architecture (short)
-            4) Results (numbers if present)
-            5) Limitations + follow-ups
-            Keep it crisp, no fluff.
-
-            Title: {title}
-            URL: {url}
-
-            CONTENT:
-            {content}
         run: |
           python main.py
