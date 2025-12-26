@@ -30,7 +30,7 @@ jobs:
           MODEL: "gpt-4o-mini"
           ENDPOINT: "https://openrouter.ai/api/v1/chat/completions"
           NOTION_PROP_URL: "URL"
-          NOTION_PROP_DONE: "Summarized"
+          NOTION_PROP_DONE: "Read"
           NOTION_PROP_ERR: "Last error"
           NOTION_PROP_RETRY: "Retry count"
         run: |
