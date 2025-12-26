@@ -33,5 +33,10 @@ jobs:
           NOTION_PROP_DONE: "Read"
           NOTION_PROP_ERR: "Last error"
           NOTION_PROP_RETRY: "Retry count"
+          SMTP_HOST: "smtp.gmail.com"
+          SMTP_PORT: "465"
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           python main.py
