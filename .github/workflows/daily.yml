@@ -27,7 +27,7 @@ jobs:
           NOTION_SOURCE_DB_ID: ${{ secrets.NOTION_SOURCE_DB_ID }}
           API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OUTPUT_DIR: "newsletter"
-          MODEL: "openai/gpt-5-nano"
+          MODEL: "openai/gpt-oss-120b"
           ENDPOINT: "https://openrouter.ai/api/v1/chat/completions"
           NOTION_PROP_URL: "URL"
           NOTION_PROP_DONE: "Read"
