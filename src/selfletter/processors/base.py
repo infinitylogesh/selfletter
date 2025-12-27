@@ -121,3 +121,4 @@ class BaseProcessor(ABC):
         content_type = self.get_content_type()
         
         return final_title, content_type, actual_url, summary
+

@@ -176,3 +176,4 @@ class NewsletterCombiner:
         lines.append(f"*End of newsletter for {date}*")
         
         return '\n'.join(lines)
+

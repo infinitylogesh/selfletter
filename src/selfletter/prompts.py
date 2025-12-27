@@ -1,4 +1,4 @@
-SUMMARY="""
+SUMMARY = """
 Summarize the following content:
 
 Title: {title}
@@ -33,3 +33,4 @@ You should always create summaries capturing the below template as a markdown fi
 ## References to further follow / read ?
 - important references and links from the content
 """
+

@@ -38,5 +38,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          PYTHONPATH: "src"
         run: |
-          python main.py
+          python -m selfletter.cli

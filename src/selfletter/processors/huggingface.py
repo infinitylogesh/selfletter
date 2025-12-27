@@ -46,3 +46,4 @@ class HuggingFaceProcessor(ArxivProcessor):
         # This will now correctly use ArxivProcessor._extract_arxiv_id 
         # because we no longer override that method name.
         return super().extract_content(f"https://arxiv.org/abs/{arxiv_id}")
+

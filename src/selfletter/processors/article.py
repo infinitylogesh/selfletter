@@ -60,3 +60,4 @@ class ArticleProcessor(BaseProcessor):
             return f"Article from {domain}"
         except:
             return url
+
