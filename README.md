@@ -1,12 +1,12 @@
 # SelfLetter - A one-person newsletter for yourself
 
-A self newsletter service built for [my personal use](placholder) to cope with the pace of AI research progress. 
+A self newsletter service built for my personal use to cope with the pace of AI research progress. 
 
 Feel free to try the repo and fork it to adapt to your needs.  Keep in mind that this was created to suit my workflow ( and my chaos), if you like to adapt to yours - you can do it by fitting your workflow in `src/selfletter/cli.py`
 
 This service reads URLs clipped / added to a notion database and summarizes the contents ( based on this [prompt](https://github.com/infinitylogesh/selfletter/blob/main/src/selfletter/prompts.py)) , sends a daily digest as a newsletter to my mail box.
 
-I have written more about the intention [here](placeholder)
+I have written more about the intention [here](https://logeshumapathi.com/blog/2025/12/28/selfletter.html)
 
 
 ### Notion Integration
