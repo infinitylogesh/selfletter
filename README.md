@@ -1,47 +1,35 @@
-# SelfLetter - Local Newsletter Summarizer
+# SelfLetter - A one-person Newsletter for me
 
-A "set-and-forget" Python script that:
+A self newsletter service built for [my personal use](placholder) to cope with the pace of AI research progress. 
 
-1. Reads your **Notion "Inbox" database** for new links daily
-2. Fetches full content from **arXiv papers** or **blog posts**
-3. Summarizes using **OpenAI** (GPT-4o-mini for cost efficiency)
-4. Writes summaries to **local markdown files** organized by date
-5. Marks inbox items as processed
+Feel free to try the repo and fork it to adapt to your needs.  Keep in mind that this was created to suit my workflow ( and my chaos), if you like to adapt to yours - you can do it by fitting your workflow in `src/selfletter/cli.py`
 
-## Folder Structure
+This service reads URLs clipped / added to a notion database and summarizes the contents ( based on this [prompt](https://github.com/infinitylogesh/selfletter/blob/main/src/selfletter/prompts.py)) , sends a daily digest as a newsletter to my mail box.
 
-```
-selfletter/
-├── newsletter/
-│   ├── 2025-12-26/
-│   │   ├── arxiv/
-│   │   │   └── attention-is-all-you-need.md
-│   │   └── blog/
-│   │       └── building-better-apis.md
-│   └── 2025-12-27/
-│       └── ...
-├── main.py
-└── ...
-```
+I have written more about the intention [here](placeholder)
 
-## Setup
 
-### 1. Notion Setup (Source Only)
-
-Create a Notion database with these properties:
-
-**Source DB ("Inbox") properties:**
-- `URL` (url) - the paper/blog link
-- `Summarized` (checkbox) - default unchecked
-- `Last error` (rich_text, optional) - for debugging
-- `Retry count` (number, optional) - tracks failed attempts
-
-### 2. Notion Integration
+### Notion Integration
 
 1. Go to [Notion Integrations](https://www.notion.so/my-integrations)
 2. Create a new integration
 3. Copy the **Internal Integration Token**
 4. Share the Inbox database with the integration
+
+### Email Integration
+
+The service is tested to work with gmail using the [Google application password](https://support.google.com/accounts/answer/185833?hl=en)
+
+### Processors:
+
+The service supports URL processing for these links:
+
+- `Arxiv`: Arxiv abstract , pdf , html urls
+- `Huggingface pages`: Hugginface page to full paper content
+- `Blog post URLs`
+- `Youtube Videos`
+
+All text content are parsed from source using `r.jina.ai` endpoint to fetch LLM suitable format.
 
 ### 3. Environment Variables
 
@@ -53,78 +41,50 @@ cp .env.example .env
 
 Required variables:
 - `NOTION_TOKEN` - your Notion integration token
-- `NOTION_SOURCE_DB_ID` - ID from the Inbox DB URL
-- `OPENAI_API_KEY` - your OpenAI API key
+- `NOTION_SOURCE_DB_ID` - ID from the Inbox DB URL 
+- `API_KEY` - your OpenAI API key
+- `ENDPOINT` - openai compatible / Openrouter chat completion endpoint 
+- `MODEL` - model you want to use, ex. `openai/gpt-oss-120b`.
+- `SMTP_USER` - your email id
+- `SMTP_PASS` - your application password from gmail
+- `EMAIL_TO` -  your email id
 
 Optional:
 - `OUTPUT_DIR` - output directory (default: `newsletter`)
 
-### 4. Local Testing
+### 4. Setup and Local Testing
+
+Setup:
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# make sure you have `uv` installed
+# (see https://docs.astral.sh/uv/getting-started/installation/)
+git clone https://github.com/infinitylogesh/selfletter.git
 
-# Run locally
-python main.py
+uv venv
+source .venv/bin/activate
+uv sync
 ```
 
-## Output Format
+Testing:
 
-Summaries are saved as markdown files with YAML frontmatter:
-
-```markdown
----
-title: "Paper Title"
-source_url: "https://arxiv.org/abs/..."
-type: "arxiv"
-date: "2025-12-26T10:30:00+00:00"
----
-
-AI-generated summary text goes here...
+```bash
+# cd selfletter
+PYTHONPATH=src python -m selfletter.cli
 ```
 
-## Deployment (GitHub Actions - Free)
+## Deployment (GitHub Actions)
 
 This project includes a GitHub Actions workflow for free daily execution:
 
 1. Create a private repo and push this code
-2. Add these secrets in GitHub repo Settings → Secrets:
-   - `NOTION_TOKEN`
-   - `NOTION_SOURCE_DB_ID`
-   - `OPENAI_API_KEY`
-3. The workflow runs daily at 02:30 UTC automatically
-4. Optionally add `OUTPUT_DIR` if you want a different output folder name
+2. Add all the env variables as secrets in `.github/workflows/daily.yml`
+3. The workflow runs daily at 01:00 UTC automatically
 
-## Configuration
 
-Customize via environment variables:
+## Acknowledgement and Gratitude:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OUTPUT_DIR` | `newsletter` | Directory for saved summaries |
-| `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model for summarization |
-| `MAX_CHARS` | `120000` | Max content characters to send to OpenAI |
-| `MAX_RETRIES` | `3` | Max retry attempts per page |
-| `SUMMARY_PROMPT` | (see code) | Custom prompt template |
-| `NOTION_PROP_*` | (see code) | Property name mappings |
-
-## Cost Estimate
-
-Using GPT-4o-mini:
-- ~$0.15 per 1M input tokens
-- ~$0.60 per 1M output tokens
-- Summarizing 1-3 papers/day: **$1-3/month**
-
-## Project Structure
-
-```
-selfletter/
-├── main.py              # Main application
-├── requirements.txt     # Python dependencies
-├── .github/workflows/   # GitHub Actions
-│   └── daily.yml
-├── .env.example         # Environment template
-├── README.md            # This file
-└── newsletter/          # Generated summaries (gitignored)
-```
+- Thanks to [Jina.ai](http://Jina.ai)  for the free reader endpoint
+- Thanks to Github Actions service for making this service simpler.
+- Thanks to Andrew Ng's [advice](https://youtu.be/733m6qBH-jI?t=830). The prompt is based on the advice.
+- This repo was mostly vibe coded with [Blackbox Cli]([https://docs.blackbox.ai/features/blackbox-cli/introduction](https://docs.blackbox.ai/features/blackbox-cli/introduction))
