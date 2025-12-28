@@ -8,3 +8,4 @@ beautifulsoup4==4.12.3
 lxml>=4.9.4,<5.2.0
 dotenv==0.9.9
 markdown==3.7
+pytest==8.3.4
