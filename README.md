@@ -1,4 +1,4 @@
-# SelfLetter - A one-person Newsletter for me
+# SelfLetter - A one-person newsletter for yourself
 
 A self newsletter service built for [my personal use](placholder) to cope with the pace of AI research progress. 
 
@@ -87,4 +87,4 @@ This project includes a GitHub Actions workflow for free daily execution:
 - Thanks to [Jina.ai](http://Jina.ai)  for the free reader endpoint
 - Thanks to Github Actions service for making this service simpler.
 - Thanks to Andrew Ng's [advice](https://youtu.be/733m6qBH-jI?t=830). The prompt is based on the advice.
-- This repo was mostly vibe coded with [Blackbox Cli]([https://docs.blackbox.ai/features/blackbox-cli/introduction](https://docs.blackbox.ai/features/blackbox-cli/introduction))
+- This repo was mostly vibe coded with [Blackbox Cli](https://docs.blackbox.ai/features/blackbox-cli/introduction)
