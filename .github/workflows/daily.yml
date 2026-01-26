@@ -1,4 +1,4 @@
-name: Notion daily summarizer
+name: Daily AI Papers Newsletter
 
 on:
   schedule:
@@ -21,23 +21,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run summarizer
+      - name: Run newsletter generator
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_SOURCE_DB_ID: ${{ secrets.NOTION_SOURCE_DB_ID }}
-          API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OUTPUT_DIR: "newsletter"
-          MODEL: "deepseek/deepseek-v3.2"
+          API_KEY: ${{ secrets.API_KEY }}
           ENDPOINT: "https://openrouter.ai/api/v1/chat/completions"
-          NOTION_PROP_URL: "URL"
-          NOTION_PROP_DONE: "Read"
-          NOTION_PROP_ERR: "Last error"
-          NOTION_PROP_RETRY: "Retry count"
+          MODEL: "deepseek/deepseek-chat"
+          OUTPUT_DIR: "newsletter"
+          TOP_PAPERS_COUNT: "5"
+          NEWSLETTER_NAME: "Daily AI Papers"
+          NEWSLETTER_SERVICE: "email"
           SMTP_HOST: "smtp.gmail.com"
           SMTP_PORT: "465"
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # Uncomment below for Kit.com instead of email
+          # NEWSLETTER_SERVICE: "kit"
+          # KIT_API_KEY: ${{ secrets.KIT_API_KEY }}
           PYTHONPATH: "src"
         run: |
           python -m selfletter.cli
