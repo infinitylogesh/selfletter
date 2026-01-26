@@ -117,8 +117,14 @@ class PaperFetcher:
                 title = match.group(1).strip()
                 arxiv_id = match.group(2)
                 
-                # Skip if title looks like metadata
+                # Skip if title looks like metadata or is too short
                 if title.lower() in ['paper', 'papers', 'view', 'read']:
+                    continue
+                if len(title) < 5 or title.isdigit():
+                    continue
+                
+                # Skip duplicates
+                if any(p.arxiv_id == arxiv_id for p in papers):
                     continue
                 
                 current_paper = Paper(
