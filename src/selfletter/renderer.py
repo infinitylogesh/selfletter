@@ -76,11 +76,20 @@ class NewsletterRenderer:
             content
         )
         
-        # Ensure LaTeX delimiters are preserved
-        # Convert $...$ to \(...\) for inline math
-        # Convert $$...$$ to \[...\] for display math
-        content = re.sub(r'\$\$([^$]+)\$\$', r'\\[\1\\]', content)
-        content = re.sub(r'(?<!\$)\$([^$\n]+)\$(?!\$)', r'\\(\1\\)', content)
+        # Protect LaTeX from markdown processing by wrapping in HTML spans
+        # KaTeX auto-render will find these and render them
+        # Display math: $$...$$ -> <span class="math-display">$$...$$</span>
+        content = re.sub(
+            r'\$\$([^$]+)\$\$',
+            r'<span class="math-display">$$\1$$</span>',
+            content
+        )
+        # Inline math: $...$ -> <span class="math-inline">$...$</span>
+        content = re.sub(
+            r'(?<!\$)\$([^$\n]+)\$(?!\$)',
+            r'<span class="math-inline">$\1$</span>',
+            content
+        )
         
         return content
     
@@ -129,11 +138,10 @@ class NewsletterRenderer:
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
         onload="renderMathInElement(document.body, {{
             delimiters: [
-                {{left: '\\\\[', right: '\\\\]', display: true}},
-                {{left: '\\\\(', right: '\\\\)', display: false}},
                 {{left: '$$', right: '$$', display: true}},
                 {{left: '$', right: '$', display: false}}
-            ]
+            ],
+            throwOnError: false
         }});"></script>
     
     <!-- Google Fonts -->
@@ -375,26 +383,16 @@ class NewsletterRenderer:
             margin: 2.5rem 0;
         }}
         
-        /* Paper cards */
-        .paper-section {{
-            background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 1.5rem;
+        /* Math display */
+        .math-display {{
+            display: block;
+            text-align: center;
             margin: 1.5rem 0;
-            border: 1px solid var(--border-color);
+            overflow-x: auto;
         }}
         
-        /* Source links */
-        .source-link {{
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            background: var(--bg-secondary);
-            border-radius: 8px;
-            font-size: 0.9rem;
-            margin: 0.5rem 0;
-            border: 1px solid var(--border-color);
+        .math-inline {{
+            display: inline;
         }}
         
         /* Footer */
