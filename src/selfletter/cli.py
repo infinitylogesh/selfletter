@@ -9,7 +9,6 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, List
 
 from dotenv import load_dotenv
 
@@ -42,6 +41,7 @@ def get_config():
         "TOP_PAPERS_COUNT": int(os.environ.get("TOP_PAPERS_COUNT", "5")),
         "NEWSLETTER_SERVICE": os.environ.get("NEWSLETTER_SERVICE", "email"),
         "NEWSLETTER_NAME": os.environ.get("NEWSLETTER_NAME", "Daily AI Papers"),
+        "SCHEDULE_MINUTES": int(os.environ.get("SCHEDULE_MINUTES", "0")),
     }
 
 
@@ -135,7 +135,45 @@ def process_paper(
 def main():
     """Main entry point."""
     config = get_config()
+
+    # Use yesterday's date for papers (they're usually available the next day)
+    yesterday = datetime.now() - timedelta(days=1)
+    paper_date = yesterday.strftime("%Y-%m-%d")
+    combiner = NewsletterCombiner(output_dir=config["OUTPUT_DIR"])
+
+
+    # check if newsletter exists for the given date
+    newsletter_path = Path(config["OUTPUT_DIR"]) / paper_date / "daily-newsletter.md"
+    if newsletter_path.exists():
+        markdown_content = newsletter_path.read_text()
+        html_content = render_newsletter(
+            markdown_content,
+            date=paper_date,
+            newsletter_name=config["NEWSLETTER_NAME"]
+        )
+        html_path = newsletter_path.with_suffix('.html')
+        html_path.write_text(html_content)
+        logger.info(f"Newsletter already exists for {paper_date}")
+        
+        # send newsletter
+        newsletter_service = get_service(config["NEWSLETTER_SERVICE"])
+        
+        # Calculate send_at if scheduling is enabled
+        send_at = None
+        if config["SCHEDULE_MINUTES"] > 0:
+            send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
+            logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
+        
+        newsletter_service.send(
+            subject=f"{config['NEWSLETTER_NAME']} - {paper_date}",
+            html_content=html_content,
+            markdown_content=markdown_content,
+            send_at=send_at
+        )
+        logger.info("Newsletter sent successfully!")
+        return
     
+    # else, proceed to fetch and process papers
     # Validate required config
     if not config["API_KEY"]:
         logger.error("API_KEY environment variable is required")
@@ -156,7 +194,6 @@ def main():
         user_agent=config["USER_AGENT"],
     )
     
-    combiner = NewsletterCombiner(output_dir=config["OUTPUT_DIR"])
     
     # Get newsletter service
     try:
@@ -167,9 +204,6 @@ def main():
         return
     
     try:
-        # Use yesterday's date for papers (they're usually available the next day)
-        yesterday = datetime.now() - timedelta(days=1)
-        paper_date = yesterday.strftime("%Y-%m-%d")
         
         logger.info(f"Fetching top {config['TOP_PAPERS_COUNT']} papers for {paper_date}")
         
@@ -225,10 +259,17 @@ def main():
                 subject = f"{config['NEWSLETTER_NAME']} - {paper_date}"
                 
                 if newsletter_service.validate_config():
+                    # Calculate send_at if scheduling is enabled
+                    send_at = None
+                    if config["SCHEDULE_MINUTES"] > 0:
+                        send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
+                        logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
+                    
                     success = newsletter_service.send(
                         subject=subject,
                         html_content=html_content,
-                        markdown_content=markdown_content
+                        markdown_content=markdown_content,
+                        send_at=send_at
                     )
                     if success:
                         logger.info("Newsletter sent successfully!")

@@ -6,7 +6,8 @@ import os
 import logging
 import smtplib
 from email.message import EmailMessage
-from typing import Optional
+from typing import Optional, Union
+from datetime import datetime
 
 from .base import NewsletterService
 
@@ -57,14 +58,24 @@ class EmailService(NewsletterService):
             return False
         return True
     
-    def send(self, subject: str, html_content: str, markdown_content: Optional[str] = None) -> bool:
+    def send(
+        self, 
+        subject: str, 
+        html_content: str, 
+        markdown_content: Optional[str] = None,
+        send_at: Optional[Union[datetime, str]] = None
+    ) -> bool:
         """
         Send newsletter via SMTP email.
+        
+        Note: SMTP does not support scheduling. Emails are sent immediately.
+        If send_at is provided, it will be ignored with a warning.
         
         Args:
             subject: Email subject line
             html_content: HTML formatted content
             markdown_content: Optional plain text fallback
+            send_at: Ignored - SMTP sends immediately
         
         Returns:
             True if sent successfully, False otherwise
@@ -72,6 +83,9 @@ class EmailService(NewsletterService):
         if not self.validate_config():
             logger.error("Cannot send email: configuration is incomplete")
             return False
+        
+        if send_at is not None:
+            logger.warning("SMTP email service does not support scheduling. Sending immediately.")
         
         msg = EmailMessage()
         msg["Subject"] = subject
