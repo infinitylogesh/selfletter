@@ -16,9 +16,9 @@ I have written more about the intention [here](https://logeshumapathi.com/blog/2
 3. Copy the **Internal Integration Token**
 4. Share the Inbox database with the integration
 
-### Email Integration
+### Email Integration ( to receive the summaries to your email )
 
-The service is tested to work with gmail using the [Google application password](https://support.google.com/accounts/answer/185833?hl=en)
+The service is tested to work with Gmail using the [Google application password](https://support.google.com/accounts/answer/185833?hl=en)
 
 ### Processors:
 
