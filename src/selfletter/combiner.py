@@ -91,30 +91,21 @@ class NewsletterCombiner:
     def _parse_summary_file(self, content: str) -> Dict:
         """Parse a summary markdown file with frontmatter."""
         lines = content.split('\n')
-        
-        # Extract frontmatter
+
+        # Extract only the leading frontmatter block. Horizontal rules inside
+        # a generated summary must remain part of the summary.
         frontmatter = {}
-        summary_content = []
-        in_frontmatter = False
-        frontmatter_ended = False
-        
-        for line in lines:
-            if line.strip() == '---':
-                if not in_frontmatter:
-                    in_frontmatter = True
-                    continue
-                else:
-                    in_frontmatter = False
-                    frontmatter_ended = True
-                    continue
-            
-            if in_frontmatter:
-                # Parse YAML-like frontmatter
+        summary_start = 0
+        if lines and lines[0].strip() == '---':
+            for index, line in enumerate(lines[1:], 1):
+                if line.strip() == '---':
+                    summary_start = index + 1
+                    break
                 if ':' in line:
                     key, value = line.split(':', 1)
                     frontmatter[key.strip()] = value.strip().strip('"')
-            elif frontmatter_ended:
-                summary_content.append(line)
+
+        summary_content = lines[summary_start:]
         
         return {
             'title': frontmatter.get('title', 'Untitled'),
@@ -132,12 +123,31 @@ class NewsletterCombiner:
 
         # Models occasionally wrap the entire response in a markdown fence,
         # which otherwise makes the newsletter display as one large code block.
-        if (
-            len(lines) >= 2
-            and re.fullmatch(r"```(?:markdown|md)?\s*", lines[0], re.IGNORECASE)
-            and lines[-1].strip() == "```"
-        ):
-            summary = "\n".join(lines[1:-1]).strip()
+        opening_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if re.fullmatch(r"```(?:markdown|md)\s*", line, re.IGNORECASE)
+            ),
+            None,
+        )
+        if opening_index is not None:
+            closing_indexes = [
+                index
+                for index, line in enumerate(lines[opening_index + 1:], opening_index + 1)
+                if line.strip() == "```"
+            ]
+            if closing_indexes and not any(
+                line.strip() for line in lines[closing_indexes[-1] + 1:]
+            ):
+                summary = "\n".join(
+                    lines[opening_index + 1:closing_indexes[-1]]
+                ).strip()
+            else:
+                # An unmatched outer marker should not leak into the issue.
+                summary = "\n".join(
+                    lines[:opening_index] + lines[opening_index + 1:]
+                ).strip()
 
         # Paper cards already provide the main title. Keep headings inside each
         # card visually subordinate to it.

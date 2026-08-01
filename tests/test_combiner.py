@@ -46,3 +46,33 @@ def test_summary_removes_accidental_outer_markdown_fence():
     assert "<code>" not in rendered
     assert "<h4>What changed?</h4>" in rendered
     assert "<li>First</li>" in rendered
+
+
+def test_summary_removes_outer_fence_after_model_preamble():
+    summary = "Here is the requested summary.\n\n```markdown\n## Result\n\nUseful.\n```"
+
+    rendered = NewsletterCombiner._render_summary_html(summary)
+
+    assert "requested summary" not in rendered
+    assert "<code>" not in rendered
+    assert "<h4>Result</h4>" in rendered
+
+
+def test_frontmatter_parser_preserves_horizontal_rules_in_summary():
+    content = '''---
+title: "Paper"
+source_url: "https://example.com"
+type: "huggingface"
+date: "2026-07-31"
+---
+
+Before
+
+---
+
+After
+'''
+
+    parsed = NewsletterCombiner()._parse_summary_file(content)
+
+    assert "Before\n\n---\n\nAfter" in parsed["summary"]
