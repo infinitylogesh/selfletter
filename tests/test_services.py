@@ -2,6 +2,7 @@
 
 import os
 import pytest
+import requests
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
@@ -133,19 +134,23 @@ class TestButtondownService:
         service = ButtondownService(api_key="test_key", status="send_now")
         assert service.validate_config() is False
 
-    @patch('selfletter.services.buttondown.requests.post')
-    def test_create_draft_with_markdown_and_idempotency_key(self, mock_post):
-        response = MagicMock()
-        response.json.return_value = {"id": "em_123", "status": "draft"}
-        response.raise_for_status = MagicMock()
-        mock_post.return_value = response
+    def test_create_draft_with_markdown_and_idempotency_key(self):
+        list_response = MagicMock()
+        list_response.json.return_value = {"results": []}
+        create_response = MagicMock()
+        create_response.json.return_value = {"id": "em_123", "status": "draft"}
 
-        service = ButtondownService(api_key="test_key", status="draft")
-        assert service.send(
-            subject="Daily AI Papers - 2026-08-01",
-            html_content="<h1>Fallback</h1>",
-            markdown_content="# Daily issue",
-        ) is True
+        with patch(
+            'selfletter.services.buttondown.requests.get', return_value=list_response
+        ), patch(
+            'selfletter.services.buttondown.requests.post', return_value=create_response
+        ) as mock_post:
+            service = ButtondownService(api_key="test_key", status="draft")
+            assert service.send(
+                subject="Daily AI Papers - 2026-08-01",
+                html_content="<h1>Fallback</h1>",
+                markdown_content="# Daily issue",
+            ) is True
 
         request = mock_post.call_args
         assert request.kwargs["json"]["body"] == "# Daily issue"
@@ -153,20 +158,73 @@ class TestButtondownService:
         assert request.kwargs["json"]["slug"] == "daily-ai-papers-2026-08-01"
         assert request.kwargs["headers"]["X-Idempotency-Key"]
 
-    @patch('selfletter.services.buttondown.requests.post')
-    def test_schedule_email(self, mock_post):
-        response = MagicMock()
-        response.json.return_value = {"id": "em_123", "status": "scheduled"}
-        response.raise_for_status = MagicMock()
-        mock_post.return_value = response
+    def test_update_existing_draft(self):
+        list_response = MagicMock()
+        list_response.json.return_value = {
+            "results": [
+                {
+                    "id": "em_existing",
+                    "subject": "Daily AI Papers - 2026-08-01",
+                    "slug": "daily-ai-papers-2026-08-01",
+                    "status": "draft",
+                }
+            ]
+        }
+        update_response = MagicMock()
+        update_response.json.return_value = {"id": "em_existing", "status": "draft"}
 
-        service = ButtondownService(api_key="test_key")
-        send_at = datetime(2026, 8, 2, 8, 0, tzinfo=timezone.utc)
-        assert service.send("Subject", "<p>Body</p>", send_at=send_at) is True
+        with patch(
+            'selfletter.services.buttondown.requests.get', return_value=list_response
+        ), patch(
+            'selfletter.services.buttondown.requests.patch', return_value=update_response
+        ) as mock_patch, patch(
+            'selfletter.services.buttondown.requests.post'
+        ) as mock_post:
+            service = ButtondownService(api_key="test_key", status="draft")
+            assert service.send(
+                "Daily AI Papers - 2026-08-01",
+                "<p>Fallback</p>",
+                markdown_content="# Corrected issue",
+            ) is True
+
+        assert mock_patch.call_args.args[0].endswith("/em_existing")
+        assert mock_patch.call_args.kwargs["json"]["body"] == "# Corrected issue"
+        mock_post.assert_not_called()
+
+    def test_schedule_email(self):
+        list_response = MagicMock()
+        list_response.json.return_value = {"results": []}
+        create_response = MagicMock()
+        create_response.json.return_value = {"id": "em_123", "status": "scheduled"}
+
+        with patch(
+            'selfletter.services.buttondown.requests.get', return_value=list_response
+        ), patch(
+            'selfletter.services.buttondown.requests.post', return_value=create_response
+        ) as mock_post:
+            service = ButtondownService(api_key="test_key")
+            send_at = datetime(2026, 8, 2, 8, 0, tzinfo=timezone.utc)
+            assert service.send("Subject", "<p>Body</p>", send_at=send_at) is True
 
         payload = mock_post.call_args.kwargs["json"]
         assert payload["status"] == "scheduled"
         assert payload["publish_date"] == "2026-08-02T08:00:00+00:00"
+
+    def test_lookup_failure_does_not_create_duplicate(self):
+        list_response = MagicMock()
+        list_response.raise_for_status.side_effect = requests.HTTPError(
+            response=MagicMock(status_code=500, text="failed")
+        )
+
+        with patch(
+            'selfletter.services.buttondown.requests.get', return_value=list_response
+        ), patch(
+            'selfletter.services.buttondown.requests.post'
+        ) as mock_post:
+            service = ButtondownService(api_key="test_key")
+            assert service.send("Subject", "<p>Body</p>") is False
+
+        mock_post.assert_not_called()
 
     def test_scheduled_status_requires_send_time(self):
         service = ButtondownService(api_key="test_key", status="scheduled")

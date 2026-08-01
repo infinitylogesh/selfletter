@@ -41,7 +41,7 @@ def get_config():
         "USER_AGENT": os.environ.get("USER_AGENT", "SelfLetterBot/1.0"),
         "TOP_PAPERS_COUNT": top_papers_count,
         "MIN_SUCCESSFUL_PAPERS": int(
-            os.environ.get("MIN_SUCCESSFUL_PAPERS", str(min(3, top_papers_count)))
+            os.environ.get("MIN_SUCCESSFUL_PAPERS", str(top_papers_count))
         ),
         "NEWSLETTER_SERVICE": os.environ.get("NEWSLETTER_SERVICE", "email"),
         "NEWSLETTER_NAME": os.environ.get("NEWSLETTER_NAME", "Daily AI Papers"),
@@ -118,6 +118,9 @@ def process_paper(
         
         processor = processor_factory.get_processor(url)
         final_title, content_type, actual_url, summary = processor.process(url, paper.title)
+
+        if not summary or not summary.strip() or summary.strip() == "(empty summary)":
+            raise RuntimeError("Summary response was empty")
         
         save_summary_to_file(
             config["OUTPUT_DIR"],

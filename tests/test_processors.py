@@ -1,4 +1,8 @@
+import json
+
 import pytest
+from unittest.mock import MagicMock, patch
+
 from selfletter.processors.arxiv import ArxivProcessor
 from selfletter.processors.huggingface import HuggingFaceProcessor
 from selfletter.processors.youtube import YouTubeProcessor
@@ -59,3 +63,51 @@ def test_article_processor_can_handle(config):
     assert processor.can_handle("https://any-website.com/article") is True
     assert processor.can_handle("https://google.com") is True
 
+
+def _summary_response(content, finish_reason="stop"):
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {"content": content},
+                "finish_reason": finish_reason,
+            }
+        ]
+    }
+    return response
+
+
+@patch("selfletter.processors.base.requests.post")
+def test_summary_retries_empty_responses_with_less_content(mock_post, config):
+    config.update(summary_prompt="{content}", max_chars=80000)
+    processor = ArticleProcessor(**config)
+    mock_post.side_effect = [
+        _summary_response(""),
+        _summary_response("  "),
+        _summary_response("final summary"),
+    ]
+
+    summary = processor.summarize("Title", "https://example.com", "x" * 100000)
+
+    assert summary == "final summary"
+    assert mock_post.call_count == 3
+    prompt_lengths = [
+        len(json.loads(call.kwargs["data"])["messages"][0]["content"])
+        for call in mock_post.call_args_list
+    ]
+    assert prompt_lengths == [80000, 40000, 20000]
+
+
+@patch("selfletter.processors.base.requests.post")
+def test_summary_raises_after_all_empty_responses(mock_post, config):
+    config.update(summary_prompt="{content}", max_chars=80000)
+    processor = ArticleProcessor(**config)
+    mock_post.side_effect = [
+        _summary_response(""),
+        _summary_response(""),
+        _summary_response(""),
+    ]
+
+    with pytest.raises(RuntimeError, match="no summary after 3 attempts"):
+        processor.summarize("Title", "https://example.com", "x" * 100000)

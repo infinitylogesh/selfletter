@@ -47,7 +47,7 @@ cp .env.example .env
 
 **Paper fetching:**
 - `TOP_PAPERS_COUNT` - Number of top papers to include (default: 5)
-- `MIN_SUCCESSFUL_PAPERS` - Minimum successful summaries required to publish (default: 3)
+- `MIN_SUCCESSFUL_PAPERS` - Minimum successful summaries required to publish (defaults to `TOP_PAPERS_COUNT`)
 
 **Newsletter delivery (choose one):**
 

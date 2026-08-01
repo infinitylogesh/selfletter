@@ -68,43 +68,75 @@ class BaseProcessor(ABC):
     def summarize(self, title: str, url: str, content: str) -> str:
         """Generate summary using OpenAI API."""
         logger.info(f"Generating summary for: {title or url}")
-        
-        # Truncate content to stay within limits
-        content = content[:self.max_chars]
-        logger.info(f"Content length after truncation: {len(content)} chars")
-        
-        prompt = self.summary_prompt.format(
-            title=title or "(untitled)", 
-            url=url, 
-            content=content
-        )
-        
-        payload = {
-            "model": self.openai_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 16384,
-            "temperature": 0.7,
-        }
-        
+
+        initial_limit = min(len(content), self.max_chars)
+        content_limits = [initial_limit]
+        while len(content_limits) < 3 and content_limits[-1] > 10000:
+            next_limit = max(10000, content_limits[-1] // 2)
+            if next_limit == content_limits[-1]:
+                break
+            content_limits.append(next_limit)
+
         try:
-            r = requests.post(
-                self.openai_endpoint,
-                headers={
-                    "Authorization": f"Bearer {self.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                data=json.dumps(payload),
-                timeout=120,
+            for attempt, char_limit in enumerate(content_limits, 1):
+                truncated_content = content[:char_limit]
+                logger.info(
+                    "Summarization attempt %s/%s with %s chars",
+                    attempt,
+                    len(content_limits),
+                    len(truncated_content),
+                )
+
+                prompt = self.summary_prompt.format(
+                    title=title or "(untitled)",
+                    url=url,
+                    content=truncated_content,
+                )
+                payload = {
+                    "model": self.openai_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 16384,
+                    "temperature": 0.7,
+                }
+
+                try:
+                    response = requests.post(
+                        self.openai_endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self.openai_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        data=json.dumps(payload),
+                        timeout=120,
+                    )
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as exc:
+                    status_code = exc.response.status_code if exc.response is not None else None
+                    if status_code in {400, 413, 422} and attempt < len(content_limits):
+                        logger.warning(
+                            "Summary request rejected with HTTP %s; retrying with less content",
+                            status_code,
+                        )
+                        continue
+                    raise
+
+                data = response.json()
+                choices = data.get("choices", [])
+                if choices:
+                    choice = choices[0]
+                    summary = choice.get("message", {}).get("content", "")
+                    if summary and summary.strip():
+                        return summary.strip()
+                    logger.warning(
+                        "Model returned empty content (finish_reason=%s); retrying",
+                        choice.get("finish_reason", "unknown"),
+                    )
+                else:
+                    logger.warning("Model response contained no choices; retrying")
+
+            raise RuntimeError(
+                f"Model returned no summary after {len(content_limits)} attempts"
             )
-            r.raise_for_status()
-            data = r.json()
-            
-            choices = data.get("choices", [])
-            if choices:
-                summary = choices[0].get("message", {}).get("content", "")
-                return summary.strip() if summary else "(empty summary)"
-            return "(empty summary)"
-            
         except requests.exceptions.RequestException as e:
             logger.error(f"OpenAI API error: {e}")
             raise RuntimeError(f"OpenAI API request failed: {e}")
@@ -121,4 +153,3 @@ class BaseProcessor(ABC):
         content_type = self.get_content_type()
         
         return final_title, content_type, actual_url, summary
-
