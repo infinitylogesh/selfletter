@@ -31,6 +31,12 @@ class NewsletterCombiner:
             date = datetime.now().strftime("%Y-%m-%d")
         
         date_dir = self.output_dir / date
+
+        # check if newsletter .md file exists
+        newsletter_path = date_dir / "daily-newsletter.md"
+        if newsletter_path.exists():
+            logger.info(f"Newsletter already exists for {date}")
+            return str(newsletter_path)
         
         if not date_dir.exists():
             logger.warning(f"No summaries found for date: {date}")
@@ -45,9 +51,7 @@ class NewsletterCombiner:
         
         # Generate combined newsletter
         newsletter_content = self._generate_newsletter(date, summaries_by_type)
-        
-        # Save combined newsletter
-        newsletter_path = date_dir / "daily-newsletter.md"
+
         newsletter_path.write_text(newsletter_content)
         
         logger.info(f"Combined newsletter saved to: {newsletter_path}")

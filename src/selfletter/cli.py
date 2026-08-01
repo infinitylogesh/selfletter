@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SelfLetter CLI - Fetches content from arXiv/blogs and summarizes via OpenAI.
+SelfLetter CLI - Fetches daily papers from HuggingFace and creates a newsletter.
 """
 
 import os
@@ -9,19 +9,15 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
-from notion_client import Client as NotionClient
 
 from .prompts import SUMMARY as SUMMARY_PROMPT
 from .processors import ProcessorFactory
 from .combiner import NewsletterCombiner
-from .utils.notion import (
-    get_page_title, get_url_property, get_retry_count,
-    safe_set_error, increment_retry_count, mark_done
-)
-from .utils.email import send_email
+from .fetcher import PaperFetcher, Paper
+from .renderer import render_newsletter
+from .services import get_service
 
 # Configure logging
 logging.basicConfig(
@@ -31,26 +27,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ----------------------------
-# Config (edit to match your DB property names)
-# ----------------------------
+
 def get_config():
+    """Load configuration from environment variables."""
     load_dotenv()
+    top_papers_count = int(os.environ.get("TOP_PAPERS_COUNT", "5"))
     return {
-        "SOURCE_DB_ID": os.environ["NOTION_SOURCE_DB_ID"],
-        "NOTION_TOKEN": os.environ["NOTION_TOKEN"],
-        "API_KEY": os.environ["API_KEY"],
+        "API_KEY": os.environ.get("API_KEY"),
         "OUTPUT_DIR": os.environ.get("OUTPUT_DIR", "newsletter"),
         "MODEL": os.environ.get("MODEL", "gpt-4o-mini"),
-        "ENDPOINT": os.environ.get("ENDPOINT", "https://openrouter.ai/api/v1"),
+        "ENDPOINT": os.environ.get("ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"),
         "MAX_CHARS": int(os.environ.get("MAX_CHARS", "200000")),
-        "USER_AGENT": os.environ.get("USER_AGENT", "NotionSummarizerBot/1.0"),
-        "MAX_RETRIES": int(os.environ.get("MAX_RETRIES", "3")),
-        "PROP_URL": os.environ.get("NOTION_PROP_URL", "URL"),
-        "PROP_DONE": os.environ.get("NOTION_PROP_DONE", "Summarized"),
-        "PROP_ERR": os.environ.get("NOTION_PROP_ERR", "Last error"),
-        "PROP_RETRY": os.environ.get("NOTION_PROP_RETRY", "Retry count"),
+        "USER_AGENT": os.environ.get("USER_AGENT", "SelfLetterBot/1.0"),
+        "TOP_PAPERS_COUNT": top_papers_count,
+        "MIN_SUCCESSFUL_PAPERS": int(
+            os.environ.get("MIN_SUCCESSFUL_PAPERS", str(min(3, top_papers_count)))
+        ),
+        "NEWSLETTER_SERVICE": os.environ.get("NEWSLETTER_SERVICE", "email"),
+        "NEWSLETTER_NAME": os.environ.get("NEWSLETTER_NAME", "Daily AI Papers"),
+        "SCHEDULE_MINUTES": int(os.environ.get("SCHEDULE_MINUTES", "0")),
     }
+
 
 def sanitize_filename(name: str) -> str:
     """Convert title to safe filename."""
@@ -58,10 +55,17 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r"[^\w\s-]", "", name)
     name = re.sub(r"[\s_]+", "-", name)
     name = re.sub(r"-+", "-", name).strip("-")
-    return name if name else "untitled"
+    return name[:100] if name else "untitled"
 
 
-def save_summary_to_file(output_dir: str, title: str, source_url: str, typ: str, summary: str, date_str: str = None):
+def save_summary_to_file(
+    output_dir: str,
+    title: str,
+    source_url: str,
+    typ: str,
+    summary: str,
+    date_str: str = None
+) -> Path:
     """Save summary to a markdown file in date-based folder structure."""
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -91,63 +95,30 @@ date: "{now}"
 """
     filepath.write_text(content)
     logger.info(f"Saved summary to: {filepath}")
+    return filepath
 
 
-def is_url_already_processed(output_dir: str, url: str) -> bool:
-    """Check if a URL has already been processed by looking at local files."""
-    folder = Path(output_dir)
-    if not folder.exists():
-        return False
-
-    for md_file in folder.rglob("*.md"):
-        try:
-            content = md_file.read_text()
-            if url in content:
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def query_unprocessed(notion: NotionClient, database_id: str, prop_done: str, date: str, page_size: int = 100) -> dict:
-    """Query Notion for unprocessed pages."""
-    return notion.databases.query(
-        database_id=database_id,
-        page_size=page_size,
-        filter={
-            "and": [
-                {"property": prop_done, "checkbox": {"equals": False}},
-                {"property": "Created", "date": {"equals": date}},
-            ]
-        },
-    )
-
-
-def process_one(notion: NotionClient, page: dict, processor_factory: ProcessorFactory, config: dict, date_str: str = None) -> bool:
-    """Process a single Notion page."""
-    page_id = page["id"]
-    title = get_page_title(page)
-    url = get_url_property(page, config["PROP_URL"])
-
-    if not url:
-        logger.warning(f"Page {page_id} missing URL property")
-        safe_set_error(notion, page_id, config["PROP_ERR"], f"Missing URL property '{config['PROP_URL']}'.")
-        return True
-
-    retry_count = get_retry_count(page, config["PROP_RETRY"])
-    if retry_count >= config["MAX_RETRIES"]:
-        logger.warning(f"Page {page_id} exceeded max retries ({config['MAX_RETRIES']}), skipping")
-        safe_set_error(notion, page_id, config["PROP_ERR"], f"Max retries ({config['MAX_RETRIES']}) exceeded")
-        return True
-
+def process_paper(
+    paper: Paper,
+    processor_factory: ProcessorFactory,
+    config: dict,
+    date_str: str
+) -> bool:
+    """
+    Process a single paper: fetch content and generate summary.
+    
+    Returns:
+        True if processed successfully, False otherwise
+    """
+    logger.info(f"Processing paper: {paper.title} ({paper.arxiv_id})")
+    
     try:
-        if is_url_already_processed(config["OUTPUT_DIR"], url):
-            logger.info(f"URL already processed, skipping: {url}")
-            return True
-
+        # Use the HuggingFace paper URL which will be handled by HuggingFaceProcessor
+        url = paper.hf_url
+        
         processor = processor_factory.get_processor(url)
-        final_title, content_type, actual_url, summary = processor.process(url, title)
-
+        final_title, content_type, actual_url, summary = processor.process(url, paper.title)
+        
         save_summary_to_file(
             config["OUTPUT_DIR"],
             title=final_title,
@@ -156,26 +127,72 @@ def process_one(notion: NotionClient, page: dict, processor_factory: ProcessorFa
             summary=summary,
             date_str=date_str,
         )
-
-        # mark_done(notion, page_id, config["PROP_DONE"], done=True)
+        
         logger.info(f"Successfully processed: {final_title}")
         return True
-
+        
     except Exception as e:
-        logger.error(f"Error processing page {page_id}: {e}")
-        safe_set_error(notion, page_id, config["PROP_ERR"], f"{type(e).__name__}: {str(e)[:500]}")
-        increment_retry_count(notion, page_id, config["PROP_RETRY"], retry_count)
-        time.sleep(1)
+        logger.error(f"Error processing paper {paper.arxiv_id}: {e}")
         return False
 
 
 def main():
     """Main entry point."""
     config = get_config()
-    logger.info("Starting SelfLetter Digest")
-    start_time = datetime.now()
 
-    notion = NotionClient(auth=config["NOTION_TOKEN"])
+    # Use yesterday's date for papers (they're usually available the next day)
+    yesterday = datetime.now() - timedelta(days=1)
+    paper_date = yesterday.strftime("%Y-%m-%d")
+    combiner = NewsletterCombiner(output_dir=config["OUTPUT_DIR"])
+
+
+    # check if newsletter exists for the given date
+    newsletter_path = Path(config["OUTPUT_DIR"]) / paper_date / "daily-newsletter.md"
+    if newsletter_path.exists():
+        markdown_content = newsletter_path.read_text()
+        html_content = render_newsletter(
+            markdown_content,
+            date=paper_date,
+            newsletter_name=config["NEWSLETTER_NAME"]
+        )
+        html_path = newsletter_path.with_suffix('.html')
+        html_path.write_text(html_content)
+        logger.info(f"Newsletter already exists for {paper_date}")
+        
+        # send newsletter
+        newsletter_service = get_service(config["NEWSLETTER_SERVICE"])
+        if not newsletter_service.validate_config():
+            raise RuntimeError(
+                f"Newsletter service is not configured: {newsletter_service.service_name}"
+            )
+        
+        # Calculate send_at if scheduling is enabled
+        send_at = None
+        if config["SCHEDULE_MINUTES"] > 0:
+            send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
+            logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
+        
+        success = newsletter_service.send(
+            subject=f"{config['NEWSLETTER_NAME']} - {paper_date}",
+            html_content=html_content,
+            markdown_content=markdown_content,
+            send_at=send_at
+        )
+        if not success:
+            raise RuntimeError("Newsletter delivery failed")
+        logger.info("Newsletter delivery completed successfully!")
+        return
+    
+    # else, proceed to fetch and process papers
+    # Validate required config
+    if not config["API_KEY"]:
+        raise RuntimeError("API_KEY environment variable is required")
+    
+    logger.info("Starting SelfLetter Daily Papers Digest")
+    start_time = datetime.now()
+    
+    # Initialize components
+    fetcher = PaperFetcher(user_agent=config["USER_AGENT"])
     
     processor_factory = ProcessorFactory(
         openai_api_key=config["API_KEY"],
@@ -186,40 +203,96 @@ def main():
         user_agent=config["USER_AGENT"],
     )
     
-    combiner = NewsletterCombiner(output_dir=config["OUTPUT_DIR"])
-
+    
+    # Get newsletter service
     try:
-        yesterday = datetime.now() - timedelta(days=1)
-        yesterday_date = yesterday.strftime("%Y-%m-%d")
-        
-        resp = query_unprocessed(notion, config["SOURCE_DB_ID"], config["PROP_DONE"], yesterday_date)
-        results = resp.get("results", [])
+        newsletter_service = get_service(config["NEWSLETTER_SERVICE"])
+        logger.info(f"Using newsletter service: {newsletter_service.service_name}")
+    except ValueError as e:
+        raise RuntimeError(f"Invalid newsletter service: {e}") from e
 
-        if not results:
-            logger.info(f"No unprocessed items found for {yesterday_date}")
+    if not newsletter_service.validate_config():
+        raise RuntimeError(
+            f"Newsletter service is not configured: {newsletter_service.service_name}"
+        )
+    
+    try:
+        
+        logger.info(f"Fetching top {config['TOP_PAPERS_COUNT']} papers for {paper_date}")
+        
+        # Fetch daily papers
+        papers = fetcher.fetch_daily_papers(
+            date=paper_date,
+            top_n=config["TOP_PAPERS_COUNT"]
+        )
+        
+        if not papers:
+            logger.warning(f"No papers found for {paper_date}")
             return
-
-        logger.info(f"Processing {len(results)} items")
-
-        success_count = 0
-        for page in results:
-            if process_one(notion, page, processor_factory, config, date_str=yesterday_date):
-                success_count += 1
-
-        elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Processed {success_count}/{len(results)} items in {elapsed:.1f}s")
         
-        if success_count > 0:
-            logger.info("Combining daily summaries into newsletter...")
-            newsletter_path = combiner.combine_daily_summaries(yesterday_date)
+        logger.info(f"Found {len(papers)} papers to process")
+        for i, paper in enumerate(papers, 1):
+            logger.info(f"  {i}. {paper.title} (upvotes: {paper.upvotes})")
+        
+        # Process each paper
+        success_count = 0
+        for paper in papers:
+            if process_paper(paper, processor_factory, config, paper_date):
+                success_count += 1
+            # Small delay between papers to avoid rate limiting
+            time.sleep(2)
+        
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Processed {success_count}/{len(papers)} papers in {elapsed:.1f}s")
+        
+        if success_count >= config["MIN_SUCCESSFUL_PAPERS"]:
+            # Combine summaries into newsletter
+            logger.info("Combining summaries into newsletter...")
+            newsletter_path = combiner.combine_daily_summaries(paper_date)
+            
             if newsletter_path:
-                logger.info(f"Daily newsletter created: {newsletter_path}")
-                content = Path(newsletter_path).read_text()
-                send_email(
-                    subject=f"Daily AI Digest - {yesterday_date}",
-                    body_markdown=content
+                logger.info(f"Newsletter created: {newsletter_path}")
+                
+                # Read markdown content
+                markdown_content = Path(newsletter_path).read_text()
+                
+                # Render to HTML
+                html_content = render_newsletter(
+                    markdown_content,
+                    date=paper_date,
+                    newsletter_name=config["NEWSLETTER_NAME"]
                 )
+                
+                # Save HTML version
+                html_path = Path(newsletter_path).with_suffix('.html')
+                html_path.write_text(html_content)
+                logger.info(f"HTML newsletter saved: {html_path}")
+                
+                # Send newsletter
+                subject = f"{config['NEWSLETTER_NAME']} - {paper_date}"
+                
+                # Calculate send_at if scheduling is enabled
+                send_at = None
+                if config["SCHEDULE_MINUTES"] > 0:
+                    send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
+                    logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
 
+                success = newsletter_service.send(
+                    subject=subject,
+                    html_content=html_content,
+                    markdown_content=markdown_content,
+                    send_at=send_at
+                )
+                if not success:
+                    raise RuntimeError("Newsletter delivery failed")
+                logger.info("Newsletter delivery completed successfully!")
+        else:
+            raise RuntimeError(
+                "Not enough papers were successfully processed: "
+                f"{success_count}/{len(papers)} succeeded, "
+                f"minimum is {config['MIN_SUCCESSFUL_PAPERS']}"
+            )
+            
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise
@@ -227,4 +300,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

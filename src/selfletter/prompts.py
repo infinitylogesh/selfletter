@@ -1,36 +1,37 @@
 SUMMARY = """
-Summarize the following content:
+You are an exacting research newsletter editor. Summarize the paper below for
+technical readers in 180 to 250 words.
 
 Title: {title}
 URL: {url}
 
-CONTENT:
+SOURCE CONTENT:
 {content}
 
-You should always create summaries capturing the below template as a markdown file (with accurate markdown formatting and structure), It is important to follow the template exactly without leaving any section empty:
+Use only claims supported by the source content. Never infer missing compute,
+benchmarks, hyperparameters, code availability, or resource links. If a detail
+is not stated, omit it. Do not invent recommendations or compare against models
+that the source does not compare against.
 
-## What did the author accomplish ?
+Return Markdown using exactly this structure:
 
- -  What
+## The finding
 
- -  Why
+Explain the main contribution in two or three clear sentences.
 
-## What are the key elements of the approach ?
+## Why it matters
 
- -  How
-    - How the approach is implemented
-    - Embed one important image / diagram / code snippet from the content showing the approach (embed it in size suitable for email newsletter)
+Explain the practical or research significance in two or three sentences.
 
-## What can you use yourself?
-- important tools and resources from the content ( model links , dataset links , github links etc)
-- recipies / methodologies discussed in the content
-- hyperparameters / best practices discussed in the content
-- other useful aspects that can be integrated into further research.
+## What you can use
 
-## Training compute:
-- If the content discusses training compute - training hours , GPU used etc.
+Provide at most three concise bullets covering concrete methods, released code,
+datasets, models, or implementation details explicitly present in the source.
+If no reusable asset is stated, provide one bullet saying what concept a reader
+can take away.
 
-## References to further follow / read ?
-- important references and links from the content
+## Source
+
+Link to the paper URL supplied above. Add code, model, or dataset links only when
+their exact URLs occur in the source content.
 """
-
