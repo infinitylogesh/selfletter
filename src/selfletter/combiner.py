@@ -3,10 +3,14 @@ Newsletter combiner - Combines daily summaries into a single newsletter file.
 """
 
 import logging
+import html
+import re
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
+
+import markdown
 
 logger = logging.getLogger(__name__)
 
@@ -119,29 +123,88 @@ class NewsletterCombiner:
             'date': frontmatter.get('date', ''),
             'summary': '\n'.join(summary_content).strip(),
         }
+
+    @staticmethod
+    def _clean_summary(summary: str) -> str:
+        """Normalize common model formatting mistakes before rendering."""
+        summary = summary.strip()
+        lines = summary.splitlines()
+
+        # Models occasionally wrap the entire response in a markdown fence,
+        # which otherwise makes the newsletter display as one large code block.
+        if (
+            len(lines) >= 2
+            and re.fullmatch(r"```(?:markdown|md)?\s*", lines[0], re.IGNORECASE)
+            and lines[-1].strip() == "```"
+        ):
+            summary = "\n".join(lines[1:-1]).strip()
+
+        # Paper cards already provide the main title. Keep headings inside each
+        # card visually subordinate to it.
+        summary = re.sub(
+            r"^(#{1,6})(\s+)",
+            lambda match: f"{'#' * min(len(match.group(1)) + 2, 6)}{match.group(2)}",
+            summary,
+            flags=re.MULTILINE,
+        )
+        return summary
+
+    @classmethod
+    def _render_summary_html(cls, summary: str) -> str:
+        """Render a paper summary as an embeddable HTML fragment."""
+        return markdown.markdown(
+            cls._clean_summary(summary),
+            extensions=[
+                'tables',
+                'fenced_code',
+                'codehilite',
+                'nl2br',
+                'sane_lists',
+            ],
+        )
+
+    @classmethod
+    def _render_paper_card(cls, index: int, summary: Dict) -> str:
+        """Build a collapsed, email-friendly paper card."""
+        title = html.escape(summary['title'])
+        source_url = html.escape(summary['source_url'], quote=True)
+        content_type = html.escape(summary['type'].replace('-', ' ').title())
+        body = cls._render_summary_html(summary['summary'])
+
+        return f'''<details class="paper-card" style="border: 1px solid #e5e7eb; border-radius: 12px; margin: 0 0 16px; overflow: hidden; background: #ffffff;">
+<summary style="cursor: pointer; padding: 18px 20px; font-size: 17px; line-height: 1.45; color: #111827;">
+<span style="display: inline-block; min-width: 32px; margin-right: 8px; color: #6366f1; font-weight: 700;">{index:02d}</span><strong>{title}</strong><br>
+<span style="display: inline-block; margin: 6px 0 0 40px; color: #6b7280; font-size: 13px;">Expand for the full analysis</span>
+</summary>
+<div class="paper-card-content" style="padding: 4px 20px 22px; border-top: 1px solid #e5e7eb; color: #1f2937;">
+<p style="margin: 16px 0 20px;"><span style="display: inline-block; margin-right: 8px; padding: 3px 8px; border-radius: 999px; background: #eef2ff; color: #4338ca; font-size: 11px; font-weight: 700; letter-spacing: .04em;">{content_type}</span><a href="{source_url}" style="color: #4f46e5; font-weight: 600;">Read the original paper &#8599;</a></p>
+{body}
+</div>
+</details>'''
     
     def _generate_newsletter(self, date: str, summaries_by_type: Dict[str, List[Dict]]) -> str:
         """Generate the combined newsletter content."""
-        lines = []
-        
-        # Header
-        lines.append(f"# Daily Newsletter - {date}")
-        lines.append("")
-        lines.append(f"*Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}*")
-        lines.append("")
-        
-        # Table of contents
-        lines.append("## Table of Contents")
-        lines.append("")
         total_count = sum(len(summaries) for summaries in summaries_by_type.values())
-        lines.append(f"**Total items: {total_count}**")
-        lines.append("")
-        
-        for content_type, summaries in sorted(summaries_by_type.items()):
-            lines.append(f"- [{content_type.title()}](#{content_type}) ({len(summaries)} items)")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d")
+            display_date = f"{parsed_date.strftime('%B')} {parsed_date.day}, {parsed_date.year}"
+        except ValueError:
+            display_date = date
+
+        # Keep Buttondown in Markdown mode so custom HTML such as <details>
+        # remains intact instead of being converted by the rich-text editor.
+        lines = [
+            "<!-- buttondown-editor-mode: plaintext -->",
+            "",
+            '<div class="issue-intro" style="margin: 0 0 28px; padding: 24px; border-radius: 16px; background: #f5f3ff; border: 1px solid #ddd6fe;">',
+            '<p style="margin: 0 0 8px; color: #6d28d9; font-size: 12px; font-weight: 700; letter-spacing: .1em;">DAILY AI PAPERS</p>',
+            f'<h1 style="margin: 0 0 10px; color: #111827; font-size: 28px; line-height: 1.2;">{html.escape(display_date)}</h1>',
+            f'<p style="margin: 0; color: #4b5563;">{total_count} research papers, distilled into practical takeaways. Select any paper to expand its full analysis.</p>',
+            "</div>",
+            "",
+            '<h2 style="margin: 0 0 16px; color: #111827; font-size: 21px;">Today\'s papers</h2>',
+            "",
+        ]
         
         # Content sections by type
         type_order = ['arxiv', 'huggingface', 'youtube', 'article']
@@ -156,28 +219,17 @@ class NewsletterCombiner:
             if t not in sorted_types:
                 sorted_types.append(t)
         
+        paper_number = 1
         for content_type in sorted_types:
-            summaries = summaries_by_type[content_type]
-            
-            lines.append(f"## {content_type.title()}")
-            lines.append("")
-            lines.append(f"*{len(summaries)} item(s)*")
-            lines.append("")
-            
-            for i, summary in enumerate(summaries, 1):
-                lines.append(f"### {i}. {summary['title']}")
+            for summary in summaries_by_type[content_type]:
+                lines.append(self._render_paper_card(paper_number, summary))
                 lines.append("")
-                lines.append(f"**Source:** [{summary['source_url']}]({summary['source_url']})")
-                lines.append("")
-                lines.append(summary['summary'])
-                lines.append("")
-                lines.append("---")
-                lines.append("")
+                paper_number += 1
         
         # Footer
-        lines.append("---")
-        lines.append("")
-        lines.append(f"*End of newsletter for {date}*")
+        lines.extend([
+            '<p style="margin: 28px 0 0; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 13px; text-align: center;">That\'s today\'s research briefing. Reply with the paper you found most useful.</p>',
+            "",
+        ])
         
         return '\n'.join(lines)
-

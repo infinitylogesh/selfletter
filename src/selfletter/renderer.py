@@ -382,6 +382,36 @@ class NewsletterRenderer:
             background: var(--border-color);
             margin: 2.5rem 0;
         }}
+
+        /* Collapsible paper cards */
+        details.paper-card {{
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }}
+
+        details.paper-card:hover,
+        details.paper-card[open] {{
+            border-color: var(--primary-color) !important;
+            box-shadow: 0 8px 20px -12px rgba(79, 70, 229, 0.45);
+        }}
+
+        details.paper-card > summary {{
+            user-select: none;
+        }}
+
+        details.paper-card[open] > summary {{
+            background: var(--bg-secondary);
+        }}
+
+        .paper-card-content > :first-child {{
+            margin-top: 1rem;
+        }}
+
+        .paper-card-content h3,
+        .paper-card-content h4,
+        .paper-card-content h5,
+        .paper-card-content h6 {{
+            line-height: 1.4;
+        }}
         
         /* Math display */
         .math-display {{
