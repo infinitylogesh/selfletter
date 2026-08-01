@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 def get_config():
     """Load configuration from environment variables."""
     load_dotenv()
+    top_papers_count = int(os.environ.get("TOP_PAPERS_COUNT", "5"))
     return {
         "API_KEY": os.environ.get("API_KEY"),
         "OUTPUT_DIR": os.environ.get("OUTPUT_DIR", "newsletter"),
@@ -38,7 +39,10 @@ def get_config():
         "ENDPOINT": os.environ.get("ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"),
         "MAX_CHARS": int(os.environ.get("MAX_CHARS", "200000")),
         "USER_AGENT": os.environ.get("USER_AGENT", "SelfLetterBot/1.0"),
-        "TOP_PAPERS_COUNT": int(os.environ.get("TOP_PAPERS_COUNT", "5")),
+        "TOP_PAPERS_COUNT": top_papers_count,
+        "MIN_SUCCESSFUL_PAPERS": int(
+            os.environ.get("MIN_SUCCESSFUL_PAPERS", str(min(3, top_papers_count)))
+        ),
         "NEWSLETTER_SERVICE": os.environ.get("NEWSLETTER_SERVICE", "email"),
         "NEWSLETTER_NAME": os.environ.get("NEWSLETTER_NAME", "Daily AI Papers"),
         "SCHEDULE_MINUTES": int(os.environ.get("SCHEDULE_MINUTES", "0")),
@@ -157,6 +161,10 @@ def main():
         
         # send newsletter
         newsletter_service = get_service(config["NEWSLETTER_SERVICE"])
+        if not newsletter_service.validate_config():
+            raise RuntimeError(
+                f"Newsletter service is not configured: {newsletter_service.service_name}"
+            )
         
         # Calculate send_at if scheduling is enabled
         send_at = None
@@ -164,20 +172,21 @@ def main():
             send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
             logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
         
-        newsletter_service.send(
+        success = newsletter_service.send(
             subject=f"{config['NEWSLETTER_NAME']} - {paper_date}",
             html_content=html_content,
             markdown_content=markdown_content,
             send_at=send_at
         )
-        logger.info("Newsletter sent successfully!")
+        if not success:
+            raise RuntimeError("Newsletter delivery failed")
+        logger.info("Newsletter delivery completed successfully!")
         return
     
     # else, proceed to fetch and process papers
     # Validate required config
     if not config["API_KEY"]:
-        logger.error("API_KEY environment variable is required")
-        return
+        raise RuntimeError("API_KEY environment variable is required")
     
     logger.info("Starting SelfLetter Daily Papers Digest")
     start_time = datetime.now()
@@ -200,8 +209,12 @@ def main():
         newsletter_service = get_service(config["NEWSLETTER_SERVICE"])
         logger.info(f"Using newsletter service: {newsletter_service.service_name}")
     except ValueError as e:
-        logger.error(f"Invalid newsletter service: {e}")
-        return
+        raise RuntimeError(f"Invalid newsletter service: {e}") from e
+
+    if not newsletter_service.validate_config():
+        raise RuntimeError(
+            f"Newsletter service is not configured: {newsletter_service.service_name}"
+        )
     
     try:
         
@@ -232,7 +245,7 @@ def main():
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(f"Processed {success_count}/{len(papers)} papers in {elapsed:.1f}s")
         
-        if success_count > 0:
+        if success_count >= config["MIN_SUCCESSFUL_PAPERS"]:
             # Combine summaries into newsletter
             logger.info("Combining summaries into newsletter...")
             newsletter_path = combiner.combine_daily_summaries(paper_date)
@@ -258,30 +271,27 @@ def main():
                 # Send newsletter
                 subject = f"{config['NEWSLETTER_NAME']} - {paper_date}"
                 
-                if newsletter_service.validate_config():
-                    # Calculate send_at if scheduling is enabled
-                    send_at = None
-                    if config["SCHEDULE_MINUTES"] > 0:
-                        send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
-                        logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
-                    
-                    success = newsletter_service.send(
-                        subject=subject,
-                        html_content=html_content,
-                        markdown_content=markdown_content,
-                        send_at=send_at
-                    )
-                    if success:
-                        logger.info("Newsletter sent successfully!")
-                    else:
-                        logger.error("Failed to send newsletter")
-                else:
-                    logger.warning(
-                        f"Newsletter service ({newsletter_service.service_name}) not configured. "
-                        "Newsletter saved locally but not sent."
-                    )
+                # Calculate send_at if scheduling is enabled
+                send_at = None
+                if config["SCHEDULE_MINUTES"] > 0:
+                    send_at = datetime.now(timezone.utc) + timedelta(minutes=config["SCHEDULE_MINUTES"])
+                    logger.info(f"Scheduling newsletter for {send_at.isoformat()}")
+
+                success = newsletter_service.send(
+                    subject=subject,
+                    html_content=html_content,
+                    markdown_content=markdown_content,
+                    send_at=send_at
+                )
+                if not success:
+                    raise RuntimeError("Newsletter delivery failed")
+                logger.info("Newsletter delivery completed successfully!")
         else:
-            logger.warning("No papers were successfully processed")
+            raise RuntimeError(
+                "Not enough papers were successfully processed: "
+                f"{success_count}/{len(papers)} succeeded, "
+                f"minimum is {config['MIN_SUCCESSFUL_PAPERS']}"
+            )
             
     except Exception as e:
         logger.error(f"Fatal error: {e}")

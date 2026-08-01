@@ -10,7 +10,7 @@ from typing import List, Optional
 from datetime import datetime
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,11 @@ class PaperFetcher:
     
     def _parse_html_content(self, html: str, top_n: int) -> List[Paper]:
         """Parse papers from HuggingFace HTML page."""
-        soup = BeautifulSoup(html, 'lxml')
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+        except FeatureNotFound:
+            logger.warning("lxml is unavailable; using Python's built-in HTML parser")
+            soup = BeautifulSoup(html, 'html.parser')
         papers = []
         
         # HuggingFace papers page structure:

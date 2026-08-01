@@ -66,7 +66,8 @@ def hello():
         html = renderer.render(md)
         
         assert "<code" in html
-        assert "def hello" in html
+        assert 'class="k">def</span>' in html
+        assert 'class="nf">hello</span>' in html
     
     def test_render_links_external(self, renderer):
         """Test that external links open in new tab."""
@@ -89,14 +90,14 @@ def hello():
         md = "The formula $E = mc^2$ is famous."
         processed = renderer._preprocess_markdown(md)
         
-        assert "\\(E = mc^2\\)" in processed
+        assert '<span class="math-inline">$E = mc^2$</span>' in processed
     
     def test_preprocess_latex_display(self, renderer):
         """Test preprocessing of display LaTeX."""
         md = "$$\\int_0^1 x^2 dx$$"
         processed = renderer._preprocess_markdown(md)
         
-        assert "\\[\\int_0^1 x^2 dx\\]" in processed
+        assert '<span class="math-display">$$\\int_0^1 x^2 dx$$</span>' in processed
     
     def test_render_responsive_images(self, renderer):
         """Test that images get responsive class."""

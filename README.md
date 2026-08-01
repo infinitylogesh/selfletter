@@ -12,6 +12,7 @@ A self-hosted newsletter service that fetches top papers from [HuggingFace Daily
   - Syntax-highlighted code blocks
   - Properly sized images
 - 📧 **Flexible Delivery**: Supports multiple newsletter services:
+  - Buttondown (recommended)
   - Email (SMTP)
   - Kit.com (formerly ConvertKit)
 - 🔄 **Robust Fetching**: Uses Jina Reader with fallback to direct HTML parsing
@@ -46,8 +47,14 @@ cp .env.example .env
 
 **Paper fetching:**
 - `TOP_PAPERS_COUNT` - Number of top papers to include (default: 5)
+- `MIN_SUCCESSFUL_PAPERS` - Minimum successful summaries required to publish (default: 3)
 
 **Newsletter delivery (choose one):**
+
+For Buttondown:
+- `NEWSLETTER_SERVICE=buttondown`
+- `BUTTONDOWN_API_KEY` - API key from Buttondown settings
+- `BUTTONDOWN_STATUS=draft` - Creates a reviewable draft; use `about_to_send` for automatic sending
 
 For Email:
 - `NEWSLETTER_SERVICE=email`
@@ -55,7 +62,7 @@ For Email:
 
 For Kit.com:
 - `NEWSLETTER_SERVICE=kit`
-- `KIT_API_KEY`
+- `KIT_API_SECRET`
 
 ### 3. Run
 
@@ -82,6 +89,8 @@ newsletter/
     └── daily-newsletter.html
 ```
 
+See [`examples/buttondown-sample.md`](examples/buttondown-sample.md) for a concise sample issue designed for Buttondown.
+
 ## Deployment (GitHub Actions)
 
 This project includes a GitHub Actions workflow for daily execution:
@@ -89,9 +98,13 @@ This project includes a GitHub Actions workflow for daily execution:
 1. Fork/clone to a private repository
 2. Add secrets in Settings → Secrets → Actions:
    - `API_KEY`
-   - `SMTP_USER`, `SMTP_PASS`, `EMAIL_TO` (for email)
-   - Or `KIT_API_KEY` (for Kit.com)
-3. The workflow runs daily at 01:00 UTC
+   - `BUTTONDOWN_API_KEY`
+3. Merge the workflow into the repository's default branch (`main`). GitHub only runs scheduled workflows from the default branch.
+4. The workflow runs daily at 01:17 UTC and creates a Buttondown draft.
+
+Buttondown requests use deterministic idempotency keys, so rerunning the same issue does not create a duplicate. When you are comfortable with fully automatic publishing, change `BUTTONDOWN_STATUS` in the workflow from `draft` to `about_to_send`.
+
+To preview the bundled issue in Buttondown, manually run the workflow with **Create the bundled sample as a Buttondown draft** enabled. Samples are always created as drafts, regardless of the production publishing setting.
 
 ## Architecture
 
@@ -104,6 +117,7 @@ src/selfletter/
 ├── prompts.py       # LLM prompts
 ├── processors/      # Content processors (arXiv, HF, YouTube, etc.)
 └── services/        # Newsletter delivery services
+    ├── buttondown.py # Buttondown drafts and publishing
     ├── email.py     # SMTP email service
     └── kit.py       # Kit.com service
 ```

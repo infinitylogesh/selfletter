@@ -4,11 +4,13 @@ Supports multiple backends: Email (SMTP), Kit.com, etc.
 """
 
 from .base import NewsletterService
+from .buttondown import ButtondownService
 from .email import EmailService
 from .kit import KitService
 
 __all__ = [
     'NewsletterService',
+    'ButtondownService',
     'EmailService',
     'KitService',
     'get_service',
@@ -30,6 +32,7 @@ def get_service(service_type: str = "email", **kwargs) -> NewsletterService:
         ValueError: If service_type is not supported
     """
     services = {
+        "buttondown": ButtondownService,
         "email": EmailService,
         "kit": KitService,
     }
